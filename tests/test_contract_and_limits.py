@@ -13,7 +13,7 @@ def test_openapi_covers_routes(app):
     actual = {
         (rule.rule.replace("<user_id>", "{user_id}"), method.lower())
         for rule in app.url_map.iter_rules()
-        if rule.endpoint != "static"
+        if rule.endpoint != "static" and not rule.endpoint.startswith("docs.")
         for method in rule.methods - {"HEAD", "OPTIONS"}
     }
     documented = {
@@ -34,6 +34,37 @@ def test_openapi_covers_routes(app):
                 references(item)
 
     references(document)
+
+
+def test_public_documentation(client):
+    response = client.get("/docs")
+    assert response.status_code == 200
+    assert response.mimetype == "text/html"
+    assert 'url: "/openapi.json"' in response.text
+    assert "SwaggerUIBundle" in response.text
+    assert "persistAuthorization: false" in response.text
+    assert "validatorUrl: null" in response.text
+    assert response.headers["Cache-Control"] == "no-store"
+
+    response = client.get("/openapi.json")
+    assert response.status_code == 200
+    assert response.mimetype == "application/json"
+    document = response.get_json()
+    assert document == json.loads(Path("docs/openapi.json").read_text())
+    assert document["servers"] == [{"url": "/"}]
+    assert document["components"]["securitySchemes"]["bearerAuth"] == {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+    }
+    assert client.get("/health/live").status_code == 200
+    assert client.get("/health/ready").status_code == 200
+    assert client.get("/api/v1/users/me").status_code == 401
+
+
+def test_documentation_keeps_host_validation(client):
+    for path in ("/docs", "/openapi.json"):
+        assert client.get(path, headers={"Host": "attacker.example"}).status_code == 400
 
 
 def test_account_limit_across_ips(app, client):
@@ -89,9 +120,7 @@ def test_profile_update_and_audit(client, account, admin):
     )
 
 
-def test_seed_cli(app, client):
-    app.extensions["settings"] = replace(app.extensions["settings"], environment="development")
-    # CLI closes over the factory's validated settings; test configuration still prohibits seed.
+def test_seed_cli(app):
     result = app.test_cli_runner().invoke(
         args=["seed-demo", "--email", "demo@example.com"], input=PASSWORD + "\n" + PASSWORD + "\n"
     )
@@ -162,3 +191,65 @@ def test_environment_helper(tmp_path):
     )
     assert again.returncode != 0
     assert (tmp_path / ".env").read_text() == content
+
+
+def test_account_limit_uses_validated_email(app, client):
+    app.extensions["settings"] = replace(app.extensions["settings"], account_limit="2/minute")
+    for index, email in enumerate(
+        ["person@bücher.de", "person@xn--bcher-kva.de", "person@bücher.de"]
+    ):
+        response = client.post(
+            "/api/v1/auth/login",
+            json={"email": email, "password": "wrong"},
+            environ_overrides={"REMOTE_ADDR": f"10.1.0.{index + 1}"},
+        )
+        assert response.status_code == (429 if index == 2 else 401)
+
+
+def test_untrusted_host_rejected(client):
+    response = client.get("/health/live", headers={"Host": "attacker.example"})
+    assert response.status_code == 400
+    assert response.content_type == "application/problem+json"
+    assert response.json["request_id"] == response.headers["X-Request-ID"]
+    assert response.json["request_id"]
+
+
+def test_proxy_headers_do_not_change_peer_limits(app, client):
+    app.extensions["settings"] = replace(app.extensions["settings"], auth_limit="2/minute")
+    for index in range(3):
+        response = client.post(
+            "/api/v1/auth/login",
+            json={"email": f"unknown{index}@example.com", "password": "wrong"},
+            headers={"X-Forwarded-For": f"10.2.0.{index + 1}"},
+        )
+        assert response.status_code == (429 if index == 2 else 401)
+
+
+def test_seed_rejects_invalid_credentials(app):
+    from auth_service import create_app
+
+    development = create_app(replace(app.extensions["settings"], environment="development"))
+    runner = development.test_cli_runner()
+    for email, password in [
+        ("not-an-email", PASSWORD),
+        ("valid@example.com", "short"),
+        ("valid@example.com", "x" * 129),
+    ]:
+        result = runner.invoke(
+            args=["seed-demo", "--email", email], input=password + "\n" + password + "\n"
+        )
+        assert result.exit_code != 0
+        assert "Invalid email or password" in result.output
+    development.extensions["engine"].dispose()
+
+
+def test_database_guard_checks_name_not_query():
+    import pytest
+
+    from tests.conftest import require_test_database
+
+    require_test_database("postgresql+psycopg://user:password@localhost/authlab_test")
+    with pytest.raises(RuntimeError):
+        require_test_database(
+            "postgresql+psycopg://user:password@localhost/authlab?application_name=_test"
+        )

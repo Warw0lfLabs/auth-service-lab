@@ -5,7 +5,7 @@ from typing import Any
 
 import jwt
 from flask import Blueprint, current_app, g, request
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from sqlalchemy import select
 
 from auth_service.errors import Problem, unauthorized
@@ -45,7 +45,11 @@ def limited(fn: Callable[..., Any]) -> Callable[..., Any]:
             stack.enter_context(limiter.limit(settings.auth_limit))
             body = request.get_json(silent=True)
             if isinstance(body, dict) and isinstance(body.get("email"), str):
-                account = digest(body["email"].strip().casefold())
+                try:
+                    email = str(EmailInput.model_validate({"email": body["email"]}).email)
+                except ValidationError:
+                    email = body["email"].strip().casefold()
+                account = digest(email)
                 stack.enter_context(
                     limiter.limit(settings.account_limit, key_func=lambda: account, scope="account")
                 )

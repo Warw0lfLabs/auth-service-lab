@@ -54,12 +54,17 @@ automatic retries so upstream failures have a predictable latency budget.
 
 ## Dependencies and operations
 
-PostgreSQL is authoritative. Redis backs rate limits and short-lived OAuth state. Authentication
-fails closed on Redis errors; readiness checks both dependencies. Liveness only checks the process.
-Rate limits apply by direct peer IP and normalized-email digest. Proxy headers are not trusted.
+PostgreSQL is authoritative. Redis backs rate limits and short-lived OAuth state. Rate-limited
+authentication endpoints fail closed on Redis errors; existing bearer-token authorization depends
+on PostgreSQL and can continue during a Redis outage. Readiness checks both dependencies; liveness
+only checks the process.
+Rate limits apply by direct peer IP and a digest of the validated, normalized email address.
+Accepted Host headers are limited to the configured public hostname and local health-check hosts.
+Proxy headers are not trusted.
 Deployment behind a reverse proxy requires an explicitly reviewed proxy/IP configuration.
 
-Successful security events commit with their state changes. Failed credential checks are recorded
-separately. Events contain IDs and event names, never secrets. Unexpected errors log only a stable
-code and request ID; SQL parameters and provider response bodies are not logged. Gunicorn access
-logging is disabled because OAuth callback URLs contain temporary codes.
+Successful security events commit with their state changes. Failed login attempts are recorded
+separately. Other rejected operations do not currently have dedicated audit events. Events contain
+IDs and event names, never secrets. Unexpected errors log only a stable code and request ID;
+SQL parameters and provider response bodies are not logged. Gunicorn access logging is disabled
+because OAuth callback URLs contain temporary codes.

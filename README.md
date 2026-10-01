@@ -72,6 +72,18 @@ fresh login rather than blindly retrying a consumed refresh token. Tokens must b
 The complete [OpenAPI 3.1 contract](docs/openapi.json) describes request/response schemas and access
 requirements. Application endpoints use `/api/v1`; health endpoints are unversioned.
 
+### Interactive Swagger UI
+
+Open [Swagger UI](http://localhost:8000/docs) after starting Compose, or
+`http://localhost:8001/docs` for the local Flask server. The public `/openapi.json` endpoint serves
+the existing `docs/openapi.json` file; the relative server URL targets the service you opened.
+Use **Authorize** with a login access token (without the `Bearer` prefix) to try protected endpoints.
+Authorization is cleared on page reload; requests can modify development data.
+
+The page loads version-pinned Swagger UI assets from unpkg with integrity checks, so the browser
+needs internet access. Remote schema validation is disabled. Run the local server from the repository
+root so it can find the specification; the Docker image includes that file.
+
 | Area | Endpoints |
 |---|---|
 | Authentication | `POST /auth/register`, `/auth/login`, `/auth/refresh`, `/auth/logout`, `/auth/logout-all` |
@@ -89,7 +101,9 @@ Administrators can promote/demote or disable/re-enable users, but cannot remove 
 administrator. Admin user lists use pages of 50; event inspection returns the latest 100.
 
 Errors use `application/problem+json` with `type`, `title`, `status`, `detail`, and `request_id`.
-Dependency outages return sanitized `503`; upstream errors/timeouts use `502`/`504`. Rate limits
+Required dependency failures return sanitized `503`; upstream errors/timeouts use `502`/`504`.
+Existing bearer access depends on PostgreSQL and can continue during a Redis outage; login and
+other rate-limited authentication endpoints fail closed. Readiness checks both services. Rate limits
 return `429`. Recovery responses are generic; action tokens expire after 30 minutes and are single-use.
 Password change and reset revoke every session and invalidate outstanding password-reset tokens.
 
@@ -115,12 +129,14 @@ verified primary GitHub email is required. An email matching an existing local a
 `GET /api/v1/users/me/external-profile` retrieves the public profile for the authenticated GitHub
 identity through a service adapter. Local-password accounts receive `404` for this endpoint.
 The adapter uses fixed GitHub origins, validated responses, bounded reads, and explicit timeouts;
-HTTP requests execute outside database transactions. Tests use mocked HTTP transports, not live
-GitHub requests. Real consent requires your own OAuth credentials.
+HTTP requests execute outside database transactions. Automated tests use mocked HTTP transports;
+the manual pass also exercised real public GitHub profile requests with a disposable identity fixture.
+Real consent requires your own OAuth credentials and was not completed in that pass.
 
 ## Local development and validation
 
 ```sh
+test -f .env || python3 scripts/init_dev_env.py
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.lock
 .venv/bin/python -m pip install --no-deps -e .
@@ -129,11 +145,12 @@ source .env
 set +a
 docker compose up -d db redis --wait
 .venv/bin/alembic upgrade head
-.venv/bin/flask --app auth_service run --port 8001
+PUBLIC_URL=http://localhost:8001 .venv/bin/flask --app auth_service run --port 8001
 ```
 
 The local Flask command is for development; Docker runs Gunicorn. `PUBLIC_URL` must match the OAuth
-callback origin. `.env` is explicitly loaded by your shell or Compose, not automatically by the app.
+callback origin; register a separate GitHub callback on port 8001 when using the local server.
+`.env` is explicitly loaded by your shell or Compose, not automatically by the app.
 
 Create a dedicated test database once:
 
@@ -152,13 +169,31 @@ Tests require a database name ending in `_test` and Redis database `15`. They ap
 truncate test tables, and flush that Redis database. Never point them at shared data. PostgreSQL and
 Redis are required; missing dependencies fail the suite rather than silently skipping integration
 checks. Unit and integration tests run together; concurrency regressions use separate connections.
-CI performs these checks on Python 3.12 and builds the Docker image.
+The CI workflow is configured to perform these checks on Python 3.12 and build the Docker image;
+it has not yet run on GitHub Actions.
 
 Coverage includes duplicate/concurrent registration, invalid credentials, disabled users, password
 hashing, JWT validation/expiry, refresh rotation/replay/concurrency, logout, password change/reset,
 verification, RBAC/injection, OAuth state/replay/collision, rate limits, upstream failures, and
-configuration/database/Redis failures. See [validation results](docs/validation.md) and [security review](docs/security-review.md) for controls
-and known limitations.
+configuration/database/Redis failures.
+
+## Quality & Security
+
+Checks recorded on 2026-10-01:
+
+- **Automated validation:** 66 tests passed with 96% statement coverage using real PostgreSQL and
+  Redis; Ruff lint/format, mypy, and Alembic schema checks passed. See
+  [validation results](docs/validation.md) for commands and migration checks.
+- **Manual/E2E testing:** real HTTP workflows passed against local Flask and Docker deployments,
+  including authentication, RBAC, token replay, rate limits, persistence, and dependency restarts.
+  [Manual testing](docs/manual-testing.md) records expected/actual results and untested scenarios.
+  Full GitHub browser consent and HTTPS cookie behavior remain unverified.
+- **Security review:** authentication, authorization, recovery, configuration, logging, and repository
+  hygiene were reviewed; identified fixes and remaining deployment risks are documented in the
+  [security review](docs/security-review.md). This is an internal review, not an independent audit.
+- **Docker validation:** image build, fresh Compose startup/migrations, health endpoints, and the
+  Python 3.12 container test suite passed locally.
+- **CI validation:** GitHub Actions is configured, but no successful remote run is claimed.
 
 ## Configuration and repository map
 
@@ -175,6 +210,7 @@ are optional as a pair; unconfigured OAuth returns `503`.
 
 [Architecture decisions](docs/architecture.md) explain the stateful JWT model and transaction order.
 Signing-key replacement invalidates existing JWTs. V1 defers key rollover, automated retention,
-MFA, account deletion/linking, email changes, and production email delivery. No proxy headers are
-trusted; review proxy/IP handling and TLS before any public deployment. Access logging is disabled
-in Gunicorn to keep OAuth callback codes out of logs. Security events remain available in PostgreSQL.
+MFA, account deletion/linking, email changes, and production email delivery. Host headers are
+restricted to the public hostname and localhost/127.0.0.1. No proxy headers are trusted; review
+proxy/IP handling and TLS before any public deployment. Access logging is disabled in Gunicorn
+to keep OAuth callback codes out of logs. Security events remain available in PostgreSQL.

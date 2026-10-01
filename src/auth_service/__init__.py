@@ -1,5 +1,6 @@
 import logging
 import uuid
+from urllib.parse import urlparse
 
 import click
 import redis
@@ -17,6 +18,7 @@ from auth_service.email import DevelopmentEmail
 from auth_service.errors import Problem
 from auth_service.github import GitHubClient
 from auth_service.models import User
+from auth_service.schemas import Register
 from auth_service.security import hasher
 
 
@@ -24,7 +26,11 @@ def create_app(settings: Settings | None = None) -> Flask:
     settings = settings or Settings.from_env()
     settings.validate()
     app = Flask(__name__)
-    app.config.update(MAX_CONTENT_LENGTH=16384, RATELIMIT_HEADERS_ENABLED=True)
+    app.config.update(
+        MAX_CONTENT_LENGTH=16384,
+        RATELIMIT_HEADERS_ENABLED=True,
+        TRUSTED_HOSTS=[urlparse(settings.public_url).hostname, "localhost", "127.0.0.1"],
+    )
     engine = create_engine(
         settings.database_url, pool_pre_ping=True, connect_args={"connect_timeout": 3}
     )
@@ -66,6 +72,7 @@ def create_app(settings: Settings | None = None) -> Flask:
 
     @app.errorhandler(Exception)
     def error(exc: Exception) -> tuple[Response, int]:
+        g.request_id = g.get("request_id") or str(uuid.uuid4())
         if "db" in g:
             g.db.rollback()
         if isinstance(exc, Problem):
@@ -111,10 +118,15 @@ def create_app(settings: Settings | None = None) -> Flask:
     @click.option("--email", required=True)
     @click.password_option(confirmation_prompt=True)
     def seed(email: str, password: str) -> None:
-        if settings.environment != "development" or len(password) < 15:
+        if settings.environment != "development":
+            raise click.ClickException("Demo seeding is development only")
+        try:
+            data = Register.model_validate({"email": email, "password": password})
+        except ValidationError:
             raise click.ClickException(
-                "Development only; password must have at least 15 characters"
-            )
+                "Invalid email or password; password must contain 15–128 characters"
+            ) from None
+        email, password = str(data.email), data.password
         with app.extensions["sessions"]() as db:
             if db.scalar(select(User).where(User.email == email.casefold())):
                 raise click.ClickException("User already exists")
@@ -131,8 +143,10 @@ def create_app(settings: Settings | None = None) -> Flask:
         click.echo("Created development administrator")
 
     from auth_service.api import bp
+    from auth_service.docs import docs_bp
     from auth_service.oauth import oauth_bp
 
     app.register_blueprint(bp, url_prefix="/api/v1")
     app.register_blueprint(oauth_bp, url_prefix="/api/v1/auth/oauth/github")
+    app.register_blueprint(docs_bp)
     return app

@@ -44,8 +44,10 @@ class Settings:
         if self.environment not in {"development", "test", "production"}:
             raise ValueError("Invalid APP_ENV")
         origin = urlparse(self.public_url)
-        if origin.scheme not in {"http", "https"} or not origin.netloc:
+        if origin.scheme not in {"http", "https"} or not origin.hostname:
             raise ValueError("Invalid PUBLIC_URL")
+        if origin.port is not None and not 1 <= origin.port <= 65535:
+            raise ValueError("Invalid PUBLIC_URL port")
         if origin.query or origin.fragment or origin.username or origin.path not in {"", "/"}:
             raise ValueError("PUBLIC_URL must be an origin")
         if self.environment == "production":

@@ -1,7 +1,9 @@
 # V1 validation record
 
-Validated locally on 2026-10-01. External GitHub responses were mocked; real PostgreSQL 17 and
-Redis 7 were used. GitHub Actions has been configured but was not executed on GitHub in this session.
+Release checks performed on 2026-10-01. Automated tests mocked external GitHub responses and used
+real PostgreSQL 17 and Redis 7. Live HTTP testing, including real public GitHub profile requests,
+is recorded separately in [manual-testing.md](manual-testing.md). GitHub Actions has been configured
+but has not yet run remotely.
 
 ## Application checks
 
@@ -20,9 +22,8 @@ export TEST_REDIS_URL=redis://localhost:56379/15
 .venv/bin/alembic check
 ```
 
-Results: 59 tests passed, 97% application statement coverage; lint, formatting, typing, and schema
-consistency passed. The host interpreter is Python 3.14.7. The suite also passed on Python 3.12.14
-inside the Docker image, using this command:
+Results: 66 tests passed, 96% application statement coverage; lint, formatting, typing, and schema
+consistency passed. The supported Python 3.12 runtime was checked inside the Docker image with:
 
 ```sh
 docker compose run --rm --no-deps \
@@ -34,7 +35,7 @@ docker compose run --rm --no-deps \
   -e COVERAGE_FILE=/tmp/authlab.coverage \
   -e RUFF_CACHE_DIR=/tmp/authlab-ruff \
   -e MYPY_CACHE_DIR=/tmp/authlab-mypy \
-  app sh -c 'export TEST_DATABASE_URL="${DATABASE_URL}_test"; python --version && pytest -q -p no:cacheprovider --cov=auth_service --cov-report=term-missing && ruff check . && ruff format --check . && mypy src migrations scripts'
+  app sh -c 'export TEST_DATABASE_URL="${DATABASE_URL}_test"; python --version && pytest -q -p no:cacheprovider --cov=auth_service --cov-report=term-missing && ruff check . && ruff format --check . && mypy src migrations scripts && alembic check'
 ```
 
 ## Empty-database migration verification
@@ -71,18 +72,40 @@ Results: build/startup passed; migration container exited successfully; applicat
 and Redis were healthy. Liveness returned `{"status":"ok"}` and readiness returned
 `{"status":"ready"}`.
 
+## Swagger UI verification
+
+On 2026-10-01, the complete suite passed after adding Swagger UI on both local Python 3.14.7
+(66 tests in 12.52s) and container Python 3.12.14 (66 tests in 13.02s), with 96% coverage on each.
+New tests verify public documentation access, JSON equality with the source file, the Bearer scheme,
+health/protected endpoint behavior, and Host validation. Documentation routes are excluded from
+the application API route inventory. The spec's server URL is relative to the running service.
+
+The rebuilt image includes `docs/openapi.json`. Real HTTP checks on ports 8000 and 8001 returned
+200 for `/docs`, `/openapi.json`, and both health endpoints, and 401 for unauthenticated `/users/me`.
+Browser rendering, Authorize, authenticated requests, and reload behavior are recorded in
+[manual-testing.md](manual-testing.md). No migrations or dependency lockfile changes were required.
+
 ## Review
 
 Authentication/security self-review is documented in [security-review.md](security-review.md).
-Issues corrected included concurrent duplicate registration, account limits across different IPs,
-audit target attribution, migration rollback constraint naming, and private mailbox directory/file
-permissions. Regression tests cover the security-critical transaction and token behavior.
-
-`git diff --check` and per-file diff whitespace checks passed. New repository files were scanned
-against the actual generated local JWT/database secrets and private-key markers; none were found.
-`.env`, virtual environments, mailbox files, caches, and coverage output are ignored and excluded
-from the Docker context where applicable. No commit or remote publication was performed.
+The review includes manual checks of authentication, authorization, token lifecycle, external HTTP,
+configuration, logging, container configuration, and release-file hygiene. Local configuration,
+mailbox files, credentials, editor settings, caches, and coverage output are excluded from Git and
+the Docker context. Review release changes with `git diff --check`, `git diff`, and `git status`.
 
 Manual setup still required: GitHub OAuth application credentials and browser consent for a live
 provider test. Production email delivery, deployment TLS/proxy policy, key rollover, and automated
 retention are deliberately outside V1.
+
+## Dependency advisories
+
+The release lockfile was checked with:
+
+```sh
+.venv/bin/python -m pip install pip-audit
+.venv/bin/pip-audit --no-deps --disable-pip -r requirements.lock --cache-dir /tmp/authlab-audit
+```
+
+No known vulnerabilities were reported for the 49 locked packages. The audit tool is an optional
+review tool, not an application dependency. Advisory checks do not cover unknown vulnerabilities
+or operating-system packages in container images.

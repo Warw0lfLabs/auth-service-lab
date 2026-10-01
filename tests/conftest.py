@@ -7,6 +7,7 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, text
+from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 
 from auth_service import create_app
@@ -17,11 +18,15 @@ from auth_service.security import hasher
 PASSWORD = "a sufficiently long password"
 
 
+def require_test_database(url):
+    if not (make_url(url).database or "").endswith("_test"):
+        raise RuntimeError("Tests require a database ending in _test")
+
+
 @pytest.fixture(scope="session")
 def database_url():
     url = os.environ["TEST_DATABASE_URL"]
-    if not url.rsplit("/", 1)[-1].endswith("_test"):
-        raise RuntimeError("Tests require a database ending in _test")
+    require_test_database(url)
     previous = os.environ.get("DATABASE_URL")
     os.environ["DATABASE_URL"] = url
     command.upgrade(Config("alembic.ini"), "head")
