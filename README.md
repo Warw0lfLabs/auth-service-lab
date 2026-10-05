@@ -169,8 +169,8 @@ Tests require a database name ending in `_test` and Redis database `15`. They ap
 truncate test tables, and flush that Redis database. Never point them at shared data. PostgreSQL and
 Redis are required; missing dependencies fail the suite rather than silently skipping integration
 checks. Unit and integration tests run together; concurrency regressions use separate connections.
-The CI workflow is configured to perform these checks on Python 3.12 and build the Docker image;
-it has not yet run on GitHub Actions.
+The CI workflow performs these checks on Python 3.12 and builds the Docker image. The workflow has
+also completed successfully on GitHub Actions.
 
 Coverage includes duplicate/concurrent registration, invalid credentials, disabled users, password
 hashing, JWT validation/expiry, refresh rotation/replay/concurrency, logout, password change/reset,
@@ -193,7 +193,8 @@ Checks recorded on 2026-10-01:
   [security review](docs/security-review.md). This is an internal review, not an independent audit.
 - **Docker validation:** image build, fresh Compose startup/migrations, health endpoints, and the
   Python 3.12 container test suite passed locally.
-- **CI validation:** GitHub Actions is configured, but no successful remote run is claimed.
+- **CI validation:** GitHub Actions successfully runs linting, formatting, type checking, migrations,
+  tests with coverage, and the Docker image build on Python 3.12.
 
 ## Configuration and repository map
 
