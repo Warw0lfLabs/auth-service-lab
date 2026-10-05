@@ -81,7 +81,8 @@ health/protected endpoint behavior, and Host validation. Documentation routes ar
 the application API route inventory. The spec's server URL is relative to the running service.
 
 The rebuilt image includes `docs/openapi.json`. Real HTTP checks on ports 8000 and 8001 returned
-200 for `/docs`, `/openapi.json`, and both health endpoints, and 401 for unauthenticated `/users/me`.
+200 for `/docs`, `/openapi.json`, and both health endpoints, and 401 for unauthenticated
+`/api/v1/users/me`.
 Browser rendering, Authorize, authenticated requests, and reload behavior are recorded in
 [manual-testing.md](manual-testing.md). No migrations or dependency lockfile changes were required.
 
@@ -109,3 +110,14 @@ The release lockfile was checked with:
 No known vulnerabilities were reported for the 49 locked packages. The audit tool is an optional
 review tool, not an application dependency. Advisory checks do not cover unknown vulnerabilities
 or operating-system packages in container images.
+
+## Publication-readiness validation — 2026-10-05
+
+The application-check commands above were rerun against real development PostgreSQL/Redis:
+66 tests passed in 9.13s with 96% statement coverage. Ruff lint and formatting passed (27 files),
+mypy passed (16 source files), and Alembic reported no schema changes. `git diff --check` passed.
+
+Read-only HTTP checks against the running Compose application returned 200 for both health
+endpoints, `/docs`, and `/openapi.json`; unauthenticated `/api/v1/users/me` returned 401. The served
+OpenAPI JSON matched the source file. This was a validation follow-up, not a new complete manual
+walkthrough. Earlier browser/OAuth limitations and the unverified remote CI status remain unchanged.
